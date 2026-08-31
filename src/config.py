@@ -11,6 +11,7 @@ TWITTER_USERNAMES = [
     for u in os.getenv("TWITTER_USERNAMES", "").split(",")
     if u.strip()
 ]
+TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "")
 STEAM_APP_ID = os.getenv("STEAM_APP_ID", "1867240")
 # 4 основных бота через env: BOT_TOKENS=tok1,tok2,tok3,tok4 или BOT1_TOKEN, BOT2_TOKEN...
 _raw = os.getenv("BOT_TOKENS", "")
