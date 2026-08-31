@@ -42,7 +42,7 @@ async def _get_user_id(session: aiohttp.ClientSession, username: str) -> str | N
     url = f"{X_API_BASE}/users/by/username/{username}"
     headers = {"Authorization": f"Bearer {TWITTER_BEARER_TOKEN}"}
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
             if resp.status != 200:
                 print(f"[Twitter] User lookup {username} failed: {resp.status}")
                 return None
@@ -71,7 +71,7 @@ async def fetch_tweets(username: str) -> list[Tweet]:
                         "media.fields": "url,type",
                     }
                     headers = {"Authorization": f"Bearer {TWITTER_BEARER_TOKEN}"}
-                    async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                         body = await resp.text()
                         print(f"[Twitter] GET {url} -> {resp.status}")
                         if resp.status == 200:
@@ -106,13 +106,14 @@ async def fetch_tweets(username: str) -> list[Tweet]:
 
 async def _fetch_tweets_rss(username: str) -> list[Tweet]:
     import feedparser
-    for instance in NITTER_INSTANCES:
+
+    async def _fetch_one(instance: str) -> list[Tweet] | None:
         url = f"{instance}/{username}/rss"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     url,
-                    timeout=aiohttp.ClientTimeout(total=10),
+                    timeout=aiohttp.ClientTimeout(total=5),
                     headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -120,24 +121,36 @@ async def _fetch_tweets_rss(username: str) -> list[Tweet]:
                     },
                 ) as resp:
                     if resp.status == 429:
-                        print(f"[Twitter] {instance} 429 rate limited")
-                        await asyncio.sleep(1)
-                        continue
+                        print(f"[Twitter] {instance} 429")
+                        return None
                     if resp.status != 200:
-                        print(f"[Twitter] {instance} -> {resp.status}")
-                        continue
+                        return None
                     data = await resp.text()
-                    # xcancel whitelist block — skip this instance
                     if "whitelist" in data.lower() and "rss reader" in data.lower():
-                        print(f"[Twitter] {instance} requires whitelist, skipping")
-                        continue
+                        print(f"[Twitter] {instance} whitelist")
+                        return None
                     tweets = _parse_nitter_feed(data, username)
-                    # фильтруем фейковый твит xcancel
                     tweets = [t for t in tweets if "whitelist" not in t.text.lower()]
                     if tweets:
                         print(f"[Twitter] RSS got {len(tweets)} tweets for @{username} from {instance}")
                         return tweets
         except Exception:
+            return None
+        return None
+
+    # параллельно по 4 инстанса за раз, чтобы уложиться в 8с лимит Discord
+    for i in range(0, len(NITTER_INSTANCES), 4):
+        chunk = NITTER_INSTANCES[i:i+4]
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*[_fetch_one(inst) for inst in chunk]),
+                timeout=6,
+            )
+            for r in results:
+                if r:
+                    return r
+        except asyncio.TimeoutError:
+            print(f"[Twitter] RSS chunk timeout")
             continue
     return []
 
